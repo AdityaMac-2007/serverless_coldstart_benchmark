@@ -77,7 +77,7 @@ def ping_all(phase_name):
 print("🚀 Starting 3-Way Serverless Latency Benchmark (GCP vs. AWS vs. Azure)")
 
 # 3 Full Experimental Cycles (Cold Start -> 3 Warm Pings -> 35-minute Cooldown)
-TOTAL_CYCLES = 15
+TOTAL_CYCLES = 9
 
 for cycle in range(1, TOTAL_CYCLES + 1):
     print(f"\n{'='*20} STARTING CYCLE {cycle}/{TOTAL_CYCLES} {'='*20}")
