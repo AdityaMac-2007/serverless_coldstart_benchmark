@@ -1,0 +1,40 @@
+name: Serverless Benchmark Runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Run Benchmark Script
+        run: python cold_start_test.py
+
+      - name: Commit and Push Updated CSVs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add *latency_data.csv
+          if git diff --staged --quiet; then
+            echo "No new CSV updates to commit."
+          else
+            git commit -m "Auto-update benchmark datasets [skip ci]"
+            git push origin main
+          fi
