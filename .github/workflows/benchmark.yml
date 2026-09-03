@@ -38,3 +38,16 @@ jobs:
             git commit -m "Auto-update benchmark datasets [skip ci]"
             git push origin main
           fi
+
+      # Triggers the next batch after a 35-minute post-batch cooldown
+      - name: Trigger Next Batch
+        env:
+          GH_TOKEN: ${{ secrets.PAT_CHAIN }}
+        run: |
+          echo "Waiting 35 minutes to preserve scale-to-zero between batches..."
+          sleep 2100
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/benchmark.yml/dispatches \
+            -d '{"ref":"main"}'
