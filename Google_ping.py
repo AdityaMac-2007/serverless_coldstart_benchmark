@@ -77,7 +77,7 @@ def ping_all(phase_name):
 print("🚀 Starting 3-Way Serverless Latency Benchmark (GCP vs. AWS vs. Azure)")
 
 # 3 Full Experimental Cycles (Cold Start -> 3 Warm Pings -> 35-minute Cooldown)
-TOTAL_CYCLES = 9
+TOTAL_CYCLES = 1
 
 for cycle in range(1, TOTAL_CYCLES + 1):
     print(f"\n{'='*20} STARTING CYCLE {cycle}/{TOTAL_CYCLES} {'='*20}")
@@ -91,7 +91,7 @@ for cycle in range(1, TOTAL_CYCLES + 1):
     # 3. Cooldown Phase (Allows all providers to scale down to zero)
     if cycle < TOTAL_CYCLES:
         print("\n⏳ Cooldown in progress: waiting 35 minutes to trigger scale-to-zero...")
-        for minutes_left in range(25, 0, -1):
+        for minutes_left in range(35, 0, -1):
             print(f"{minutes_left} minutes remaining...")
             time.sleep(60)
 
