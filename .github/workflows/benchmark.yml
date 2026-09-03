@@ -52,7 +52,7 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_CHAIN }}
         run: |
           echo "Waiting 35 minutes to preserve scale-to-zero between batches..."
-          sleep 5
+          sleep 2100
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
