@@ -110,11 +110,37 @@ schema:
   tell "AWS is fine but the benchmark's auth is misconfigured" apart from
   "AWS is genuinely failing" — worth checking independently of anything
   here.
+
+ROUND 3 — found from a user report that Figure 3 showed visibly broken
+line segments: individual cycles missing their Cold Start or Warm Ping
+point with no visual explanation why.
+
+  • `Cycle` is assigned before the IQR outlier filter ran (Round 1's
+    vectorized version, still doing exactly what it always did). A row
+    that got IQR-filtered out still "belonged" to a cycle number that
+    survived via its other rows -- it just had no plottable value left
+    for that one phase at that one cycle. fig_timeseries can't tell
+    "never measured this cycle" apart from "measured, then discarded as
+    an outlier"; both show up as the same NaN, which matplotlib renders
+    as a break in the line. Worse, IQR-trimming a *stability across
+    cycles* chart works against its own purpose: a genuine spike or dip
+    is exactly the anomaly that figure exists to surface, not noise to
+    hide. Fixed by removing IQR filtering from `_clean_one` entirely --
+    every row that passes the cutoff/status/phase checks is now kept and
+    cached -- and applying the same quantile math only inside fig_violin,
+    scoped to each panel's own (provider, phase) values, right before
+    that panel is drawn. Figure 1's distributions are unaffected (same
+    math, just computed per panel at render time instead of once
+    globally); Figure 3 now shows every real measurement, anomalies
+    included. `_CLEAN_LOGIC_VERSION` bumped again so old cached .pkl
+    files (built under the old, IQR-filtered logic) rebuild automatically
+    on the next run.
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import warnings
 from pathlib import Path
 
@@ -197,7 +223,7 @@ CUTOFF_DATE = pd.Timestamp("2026-09-01")
 # so the on-disk cache (keyed on each raw file's mtime+size) can't silently
 # keep serving rows produced by an older version of the logic just because
 # the source CSV itself happens not to have changed.
-_CLEAN_LOGIC_VERSION = "2"
+_CLEAN_LOGIC_VERSION = "3"
 
 _CACHE_DIR = Path(".cache_latency")
 
@@ -278,16 +304,14 @@ def _clean_one(df: pd.DataFrame, provider: str) -> pd.DataFrame:
     df["WarmSlot"] = (df[df["Phase"] == "Warm Ping"]
                        .groupby("Cycle").cumcount() + 1)
 
-    # IQR outlier removal, vectorized via groupby-transform instead of a
-    # per-group Python loop with boolean-index writes. Same semantics
-    # (global IQR per provider+phase across all cycles seen so far), just
-    # doesn't slow down as more (provider, phase) groups appear.
-    grp = df.groupby(["Provider", "Phase"])["Latency_ms"]
-    q1 = grp.transform(lambda v: v.quantile(0.25))
-    q3 = grp.transform(lambda v: v.quantile(0.75))
-    iqr = q3 - q1
-    lo, hi = q1 - 2.5 * iqr, q3 + 2.5 * iqr
-    df = df[(df["Latency_ms"] >= lo) & (df["Latency_ms"] <= hi)].copy()
+    # No IQR outlier filtering here anymore -- see ROUND 3 in the module
+    # docstring. It used to run at this point, but Cycle is assigned
+    # above, before any filtering, so removing an "outlier" row left its
+    # cycle number still present (via its other rows) with a hole where
+    # that phase's value used to be -- fig_timeseries rendered that hole
+    # as a broken line segment. Every row that passes the checks above is
+    # now kept; outlier trimming happens per-panel inside fig_violin,
+    # where it actually belongs.
     return df
 
 
@@ -392,6 +416,21 @@ def fig_violin(df: pd.DataFrame, out_dir: Path) -> None:
         for row, phase in enumerate(["Cold Start", "Warm Ping"]):
             ax = fig.add_subplot(gs[row, col])
             vals = sub.loc[sub["Phase"] == phase, "Latency_ms"]
+
+            # IQR-based outlier trim, scoped to this panel's own
+            # (provider, phase) values -- kept local to this figure rather
+            # than applied to the shared cleaned data (see ROUND 3), since
+            # removing a "statistical outlier" row upstream also erased it
+            # from Figure 3's per-cycle timeseries. Same quantile math as
+            # the original global version (Round 1), just computed here,
+            # per panel, at render time instead of once for the whole
+            # dataset.
+            if not vals.empty:
+                q1, q3 = vals.quantile(0.25), vals.quantile(0.75)
+                iqr = q3 - q1
+                lo, hi = q1 - 2.5 * iqr, q3 + 2.5 * iqr
+                vals = vals[(vals >= lo) & (vals <= hi)]
+
             ph_c = PHASE_COLORS[phase]
 
             ax.set_xlim(-0.55, 0.85)
@@ -516,7 +555,17 @@ def fig_timeseries(df: pd.DataFrame, out_dir: Path) -> None:
         print("  Figure 3 skipped: no data.")
         return
 
-    fig, axes = plt.subplots(1, n, figsize=(max(7.2, 2.4 * n), 3.2),
+    # Panel width used to depend only on provider count, not on how many
+    # cycles need to fit on the x-axis. That was fine at a handful of
+    # cycles, but once a provider has been running a while (80+ cycles),
+    # the same ~2.4"/panel forces 80 points into almost no room -- that's
+    # what made this crowded. Widening only kicks in past 15 cycles, so
+    # short runs render exactly as before.
+    cycle_counts = [df.loc[df["Provider"] == p, "Cycle"].nunique() for p in providers]
+    max_cycles = max(cycle_counts) if cycle_counts else 0
+    panel_w = 2.4 + 0.03 * max(0, max_cycles - 15)
+
+    fig, axes = plt.subplots(1, n, figsize=(max(7.2, panel_w * n), 3.2),
                               gridspec_kw=dict(wspace=0.55,
                                                 left=0.08, right=0.93,
                                                 top=0.78, bottom=0.16))
@@ -565,6 +614,18 @@ def fig_timeseries(df: pd.DataFrame, out_dir: Path) -> None:
         warm_arr = np.array(warm_mean, dtype=float)
         std_arr = np.array(warm_std, dtype=float)
 
+        # With many cycles, a marker at every single point becomes a solid
+        # smear -- this is the main thing that made the figure look
+        # "crowded" at 80+ cycles/provider. Thin markers to a target of
+        # ~18, evenly spaced, always keeping the first and last cycle
+        # marked. The connecting line still passes through every real
+        # point either way -- no data is dropped, just the marker glyphs.
+        target_markers = 18
+        stride = max(1, math.ceil(len(xs) / target_markers))
+        marker_idxs = sorted(set(range(0, len(xs), stride)) | {len(xs) - 1})
+        dense = len(xs) > target_markers
+        line_w = 1.1 if dense else 1.6
+
         # Twin y-axis: cold start (large magnitude) on the left, warm ping
         # (1-2 orders of magnitude smaller) on the right. This is the fix —
         # on a shared linear axis the warm line was visually flat at y≈0,
@@ -573,15 +634,15 @@ def fig_timeseries(df: pd.DataFrame, out_dir: Path) -> None:
 
         (line_cold,) = ax_cold.plot(
             xs, cold_arr, color=PHASE_COLORS["Cold Start"],
-            lw=1.6, marker="o", markersize=5.5, markerfacecolor="white",
+            lw=line_w, marker="o", markersize=5.5, markerfacecolor="white",
             markeredgecolor=PHASE_COLORS["Cold Start"], markeredgewidth=1.4,
-            zorder=4, label="Cold Start")
+            markevery=marker_idxs, zorder=4, label="Cold Start")
 
         (line_warm,) = ax_warm.plot(
             xs, warm_arr, color=PHASE_COLORS["Warm Ping"],
-            lw=1.6, marker="s", markersize=4.5, markerfacecolor="white",
+            lw=line_w, marker="s", markersize=4.5, markerfacecolor="white",
             markeredgecolor=PHASE_COLORS["Warm Ping"], markeredgewidth=1.4,
-            zorder=4, label="Warm (mean, right axis)")
+            markevery=marker_idxs, zorder=4, label="Warm (mean, right axis)")
         ax_warm.fill_between(xs, warm_arr - std_arr, warm_arr + std_arr,
                               color=PHASE_COLORS["Warm Ping"], alpha=0.15,
                               zorder=2, linewidth=0)
@@ -623,10 +684,13 @@ def fig_timeseries(df: pd.DataFrame, out_dir: Path) -> None:
         elif has_warm:
             ax_warm.set_yticklabels([])
 
-        # Cap the number of x-ticks so this stays legible as cycles grow
-        # past ~15-20; always keep the first and last cycle visible.
+        # Cap the number of x-ticks so this stays legible as cycles grow;
+        # the cap itself now scales with density (min 8, max 16) so a wide
+        # panel with many cycles isn't stuck at the same ~10 labels a short
+        # one gets, while still never turning into label spam.
+        nbins = min(16, max(8, len(xs) // 6))
         ax_cold.xaxis.set_major_locator(
-            mticker.MaxNLocator(nbins=10, integer=True, min_n_ticks=1))
+            mticker.MaxNLocator(nbins=nbins, integer=True, min_n_ticks=1))
         ax_cold.xaxis.set_major_formatter(
             mticker.FuncFormatter(lambda v, _: f"{int(v)}" if float(v).is_integer() else ""))
         ax_cold.set_xlim(xs.min() - 0.4, xs.max() + 0.4)
