@@ -9,19 +9,19 @@ import requests
 CONFIG = {
     "Google_Cloud_Run": {
         "url": "https://cold-start-test-513782382242.asia-south1.run.app",
-        "file": "gcp_latency_data.csv"
+        "file": "gcp_backup_latency_data.csv"
     },
     "AWS_Lambda": {
         # Confirmed against your working curl test: the version pasted in
         # for "optimization" had an extra "x" ("ighxhxm7...") that doesn't
         # match this ("ighhxm7...") -- that typo would turn every AWS ping
         # into a dead DNS lookup instead of a real request.
-        "url": "https://ighxhxm7nqfvwdigpcpm526yia0mtnxi.lambda-url.eu-north-1.on.aws/",
-        "file": "aws_lambda_latency_data.csv"
+        "url": "https://rqrxor4woxs6hvnzd7yj6ciuc40mcrcx.lambda-url.ap-south-1.on.aws/",
+        "file": "aws_mumbai_backup_latency_data.csv"
     },
     "Azure_Functions": {
         "url": "https://azure-coldstart-test-cxf6chcdc5brgjcz.indiasouthcentral-01.azurewebsites.net/api/HttpTrigger1",
-        "file": "azure_latency_data.csv"
+        "file": "azure_backup_latency_data.csv"
     }
 }
 
@@ -96,6 +96,6 @@ for cycle in range(1, TOTAL_CYCLES + 1):
             time.sleep(60)
 
 print("\n🎉 Benchmark Complete! Data recorded in:")
-print("   - gcp_latency_data.csv")
-print("   - aws_lambda_latency_data.csv")
-print("   - azure_latency_data.csv")
+print("   - gcp_backup_latency_data.csv")
+print("   - aws_mumbai_backup_latency_data.csv")
+print("   - azure_backup_latency_data.csv")
